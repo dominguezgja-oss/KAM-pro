@@ -465,7 +465,10 @@ select option { background: var(--surface); }
       <div class="page-title">Buenos días 👋</div>
       <div class="page-sub" id="dash-sub">Cargando...</div>
     </div>
-    <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3);text-align:right" id="dash-date"></div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="btn-icon" onclick="solicitarNotificaciones()" id="bell-btn" title="Activar recordatorios" style="font-size:16px;background:transparent;border:none;cursor:pointer">🔔</button>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3);text-align:right" id="dash-date"></div>
+    </div>
   </div>
 
   <div class="stats-row">
@@ -481,6 +484,30 @@ select option { background: var(--surface); }
       <div class="stat-num" style="color:var(--green)" id="s-pipe">0</div>
       <div class="stat-lbl">Pipeline</div>
     </div>
+  </div>
+
+  <!-- NOTA RÁPIDA -->
+  <div class="card" style="margin-bottom:10px">
+    <div class="card-title">🎙 Nota rápida</div>
+    <div style="display:flex;gap:8px;align-items:flex-start">
+      <textarea id="nota-rapida-txt" placeholder="Escribe o dicta una nota rápida..." style="min-height:60px;font-size:13px"></textarea>
+      <button class="voice-btn" id="vb-nota" onclick="startVoice('nota-rapida-txt','vb-nota')" style="flex-shrink:0">🎙</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+      <select id="nota-cliente" style="flex:1;font-size:12px;padding:8px 10px">
+        <option value="">Sin cliente</option>
+      </select>
+      <button class="btn btn-accent btn-sm" onclick="guardarNotaRapida()">Guardar</button>
+    </div>
+  </div>
+
+  <!-- Notas guardadas recientes -->
+  <div id="notas-recientes-box" style="display:none" class="card" style="margin-bottom:10px">
+    <div class="card-title" style="display:flex;justify-content:space-between">
+      <span>📝 Notas recientes</span>
+      <button onclick="toggleNotas()" style="background:none;border:none;color:var(--text3);font-size:11px;cursor:pointer" id="toggle-notas-btn">Ver todas</button>
+    </div>
+    <div id="lista-notas-rapidas"></div>
   </div>
 
   <!-- Clientes sin contacto reciente -->
@@ -577,7 +604,10 @@ select option { background: var(--surface); }
 <div class="page" id="page-reportes">
   <div class="page-header">
     <div><div class="page-title">Reporte semanal</div></div>
-    <button class="btn btn-surface btn-sm" onclick="exportarReporte()">↑ Exportar</button>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-surface btn-sm" onclick="exportarExcel()" style="color:#10b981;border-color:#10b981">⬇ Excel</button>
+      <button class="btn btn-surface btn-sm" onclick="exportarReporte()" style="font-size:11px">↑ Copiar</button>
+    </div>
   </div>
   <div id="reporte-content"></div>
 </div>
@@ -1392,6 +1422,7 @@ function renderHome() {
 
   // Tip
   document.getElementById('dash-tip').textContent = tips[now.getDate() % tips.length];
+  renderNotasRapidas();
 }
 
 // ===== BADGES =====
@@ -1578,6 +1609,7 @@ function openOCDetalle(id) {
     </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-ghost btn-sm" style="flex:1" onclick="eliminarOC(${oc.id})">Eliminar</button>
+      <button class="btn btn-surface btn-sm" style="flex:1;color:#10b981;border-color:#10b981" onclick="exportarOCWord(${oc.id})">⬇ Word</button>
       <button class="btn btn-surface btn-sm" style="flex:1" onclick="closeModal('m-oc-detalle')">Cerrar</button>
     </div>`;
   openModal('m-oc-detalle');
@@ -1787,10 +1819,288 @@ function exportarReporte() {
   navigator.clipboard.writeText(txt).then(() => alert('Reporte copiado al portapapeles ✅\nPega en WhatsApp, email o Google Docs.'));
 }
 
+// ===== EXPORTAR EXCEL =====
+function exportarExcel() {
+  const now = new Date();
+  const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay() + 1);
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
+  const fmt = d => d.toLocaleDateString('es-GT', { day:'numeric', month:'short', year:'numeric' });
+
+  // Hoja 1: Clientes
+  let csvClientes = 'CLIENTES\n';
+  csvClientes += 'Nombre,Tipo,Contacto,WhatsApp,Email,Valor mensual Q,Prioridad,Ultimo contacto,Dias sin visita\n';
+  DB.clientes.forEach(c => {
+    const d = daysSince(c.ultimaVisita);
+    csvClientes += `"${c.nombre}","${c.tipo}","${c.contacto||''}","${c.whatsapp||''}","${c.email||''}","${c.valor||0}","${c.prioridad}","${c.ultimaVisita ? new Date(c.ultimaVisita).toLocaleDateString('es-GT') : 'Sin visita'}","${d !== null ? d : 'Sin visita'}"\n`;
+  });
+
+  // Hoja 2: OC
+  let csvOC = '\n\nORDENES DE COMPRA\n';
+  csvOC += 'N° OC,Cliente,Fecha,Entrega,Estado,Productos,Total Q,Notas\n';
+  DB.ocs.forEach(oc => {
+    const cl = DB.clientes.find(c => c.id == oc.clienteId);
+    const prods = oc.items.map(i => `${i.producto} x${i.cantidad}`).join(' | ');
+    csvOC += `"${oc.numero}","${cl ? cl.nombre : ''}","${oc.fecha}","${oc.entrega||''}","${oc.estado}","${prods}","${oc.total.toFixed(2)}","${oc.notas||''}"\n`;
+  });
+
+  // Hoja 3: Pipeline
+  let csvPipe = '\n\nPIPELINE\n';
+  csvPipe += 'Oportunidad,Cliente,Etapa,Valor Q,Fecha cierre,Notas\n';
+  DB.ops.forEach(o => {
+    const cl = DB.clientes.find(c => c.id == o.clienteId);
+    csvPipe += `"${o.nombre}","${cl ? cl.nombre : ''}","${o.etapa}","${o.valor}","${o.fecha||''}","${o.notas||''}"\n`;
+  });
+
+  // Hoja 4: Visitas semana
+  let csvVisitas = '\n\nVISITAS SEMANA\n';
+  csvVisitas += 'Cliente,Fecha,Nota\n';
+  DB.clientes.forEach(c => {
+    (c.visitas||[]).forEach(v => {
+      const vd = new Date(v.fecha);
+      if (vd >= weekStart && vd <= weekEnd)
+        csvVisitas += `"${c.nombre}","${new Date(v.fecha).toLocaleDateString('es-GT')}","${v.nota}"\n`;
+    });
+  });
+
+  // Hoja 5: Productos
+  let csvProd = '\n\nPRODUCTOS MAS VENDIDOS\n';
+  csvProd += 'Producto,Unidades totales,Total Q,N° OC\n';
+  calcProyecciones().forEach(([p, d]) => {
+    csvProd += `"${p}","${d.unidades}","${d.total.toFixed(2)}","${d.ocs}"\n`;
+  });
+
+  const csv = `REPORTE KAM PRO - LABYMED\nGenerado: ${fmt(now)} | KAM: Colocho\n\n` + csvClientes + csvOC + csvPipe + csvVisitas + csvProd;
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `KAM-Reporte-${now.toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ===== EXPORTAR OC A WORD (HTML descargable) =====
+function exportarOCWord(id) {
+  const oc = DB.ocs.find(x => x.id === id);
+  if (!oc) return;
+  const cl = DB.clientes.find(c => c.id == oc.clienteId);
+  const now = new Date();
+
+  const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; color: #222; font-size: 13px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; border-bottom: 3px solid #1a56db; padding-bottom: 16px; }
+  .logo { font-size: 22px; font-weight: 900; color: #1a56db; }
+  .logo-sub { font-size: 11px; color: #666; margin-top: 2px; }
+  .doc-info { text-align: right; }
+  .doc-title { font-size: 18px; font-weight: 700; color: #1a56db; }
+  .doc-num { font-size: 13px; color: #333; margin-top: 4px; }
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .field-label { font-size: 10px; color: #888; font-weight: 600; text-transform: uppercase; }
+  .field-value { font-size: 14px; color: #222; margin-top: 2px; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #1a56db; color: #fff; padding: 8px 12px; text-align: left; font-size: 11px; }
+  td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 12px; }
+  tr:nth-child(even) td { background: #f8f9ff; }
+  .total-row td { font-weight: 700; font-size: 14px; background: #f0f4ff; border-top: 2px solid #1a56db; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+  .badge-pend { background: #fef3c7; color: #92400e; }
+  .badge-proc { background: #dbeafe; color: #1e40af; }
+  .badge-done { background: #d1fae5; color: #065f46; }
+  .footer { margin-top: 48px; border-top: 1px solid #eee; padding-top: 16px; display: flex; justify-content: space-between; font-size: 11px; color: #999; }
+  .firma { margin-top: 60px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  .firma-line { border-top: 1px solid #333; padding-top: 8px; font-size: 11px; color: #666; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <div class="logo">LABYMED S.A.</div>
+    <div class="logo-sub">Suministros para Laboratorio Clínico</div>
+    <div class="logo-sub">Guatemala, C.A.</div>
+  </div>
+  <div class="doc-info">
+    <div class="doc-title">ORDEN DE COMPRA</div>
+    <div class="doc-num">${oc.numero}</div>
+    <div class="doc-num" style="margin-top:4px">Fecha: ${oc.fecha}</div>
+    <div style="margin-top:6px"><span class="badge badge-${oc.estado==='Entregada'?'done':oc.estado==='En proceso'?'proc':'pend'}">${oc.estado}</span></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Datos del cliente</div>
+  <div class="grid2">
+    <div>
+      <div class="field-label">Institución</div>
+      <div class="field-value">${cl ? cl.nombre : '—'}</div>
+    </div>
+    <div>
+      <div class="field-label">Contacto</div>
+      <div class="field-value">${cl ? (cl.contacto || '—') : '—'}</div>
+    </div>
+    <div>
+      <div class="field-label">Tipo</div>
+      <div class="field-value">${cl ? cl.tipo : '—'}</div>
+    </div>
+    <div>
+      <div class="field-label">Entrega estimada</div>
+      <div class="field-value">${oc.entrega || '—'}</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Detalle de productos</div>
+  <table>
+    <thead><tr><th>#</th><th>Producto</th><th>Cantidad</th><th>Precio unit.</th><th>Subtotal</th></tr></thead>
+    <tbody>
+      ${oc.items.map((item, i) => `<tr>
+        <td>${i+1}</td>
+        <td>${item.producto}</td>
+        <td style="text-align:center">${item.cantidad}</td>
+        <td>Q${item.precio.toLocaleString('es-GT',{minimumFractionDigits:2})}</td>
+        <td>Q${(item.cantidad*item.precio).toLocaleString('es-GT',{minimumFractionDigits:2})}</td>
+      </tr>`).join('')}
+      <tr class="total-row">
+        <td colspan="4" style="text-align:right">TOTAL</td>
+        <td>Q${oc.total.toLocaleString('es-GT',{minimumFractionDigits:2})}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+${oc.notas ? `<div class="section">
+  <div class="section-title">Observaciones</div>
+  <div style="font-size:13px;line-height:1.6;color:#444">${oc.notas}</div>
+</div>` : ''}
+
+<div class="firma">
+  <div>
+    <div class="firma-line">Elaborado por: Colocho · KAM Labymed</div>
+  </div>
+  <div>
+    <div class="firma-line">Autorizado por: _______________________</div>
+  </div>
+</div>
+
+<div class="footer">
+  <div>KAM Pro · Labymed S.A.</div>
+  <div>Generado: ${now.toLocaleDateString('es-GT',{day:'numeric',month:'long',year:'numeric'})}</div>
+</div>
+</body></html>`;
+
+  const blob = new Blob([html], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `OC-${oc.numero}-${cl ? cl.nombre.replace(/\s/g,'-') : 'cliente'}.doc`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ===== NOTAS RÁPIDAS =====
+DB.notas = JSON.parse(localStorage.getItem('kp_notas') || '[]');
+let mostrarTodasNotas = false;
+
+function guardarNotaRapida() {
+  const txt = document.getElementById('nota-rapida-txt').value.trim();
+  if (!txt) return alert('Escribe o dicta una nota primero');
+  const n = {
+    id: Date.now(),
+    texto: txt,
+    clienteId: document.getElementById('nota-cliente').value,
+    fecha: new Date().toISOString(),
+  };
+  DB.notas.unshift(n);
+  localStorage.setItem('kp_notas', JSON.stringify(DB.notas));
+  document.getElementById('nota-rapida-txt').value = '';
+  renderNotasRapidas();
+}
+
+function renderNotasRapidas() {
+  // Populate select
+  const sel = document.getElementById('nota-cliente');
+  if (sel) {
+    const v = sel.value;
+    sel.innerHTML = '<option value="">Sin cliente</option>' + DB.clientes.map(c => `<option value="${c.id}">${c.nombre}</option>`).join('');
+    sel.value = v;
+  }
+
+  const box = document.getElementById('notas-recientes-box');
+  const lista = document.getElementById('lista-notas-rapidas');
+  if (!DB.notas.length) { if (box) box.style.display = 'none'; return; }
+  if (box) box.style.display = 'block';
+
+  const limit = mostrarTodasNotas ? DB.notas.length : 3;
+  const btn = document.getElementById('toggle-notas-btn');
+  if (btn) btn.textContent = mostrarTodasNotas ? 'Ver menos' : `Ver todas (${DB.notas.length})`;
+
+  lista.innerHTML = DB.notas.slice(0, limit).map(n => {
+    const cl = DB.clientes.find(c => c.id == n.clienteId);
+    const fecha = new Date(n.fecha).toLocaleDateString('es-GT', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;line-height:1.5">${n.texto}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px">
+        <div style="font-size:11px;color:var(--text2)">${cl ? cl.nombre : ''} <span style="color:var(--text3)">· ${fecha}</span></div>
+        <button onclick="eliminarNota(${n.id})" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function eliminarNota(id) {
+  DB.notas = DB.notas.filter(n => n.id !== id);
+  localStorage.setItem('kp_notas', JSON.stringify(DB.notas));
+  renderNotasRapidas();
+}
+
+function toggleNotas() {
+  mostrarTodasNotas = !mostrarTodasNotas;
+  renderNotasRapidas();
+}
+
+// ===== NOTIFICACIONES / RECORDATORIOS =====
+function solicitarNotificaciones() {
+  if (!('Notification' in window)) { alert('Tu navegador no soporta notificaciones.'); return; }
+  Notification.requestPermission().then(perm => {
+    if (perm === 'granted') {
+      alert('✅ Notificaciones activadas. Te avisaré cuando un cliente lleve más de 7 días sin contacto.');
+      verificarRecordatorios();
+    } else {
+      alert('Notificaciones bloqueadas. Puedes activarlas en la configuración del navegador.');
+    }
+  });
+}
+
+function verificarRecordatorios() {
+  if (Notification.permission !== 'granted') return;
+  const criticos = DB.clientes.filter(c => {
+    const d = daysSince(c.ultimaVisita);
+    return d === null || d >= 7;
+  });
+  if (!criticos.length) return;
+  const nombres = criticos.slice(0,3).map(c => c.nombre).join(', ');
+  const extra = criticos.length > 3 ? ` y ${criticos.length - 3} más` : '';
+  new Notification('KAM Pro · Seguimiento pendiente', {
+    body: `${criticos.length} cliente(s) sin contacto reciente: ${nombres}${extra}`,
+    icon: 'https://em-content.zobj.net/source/google/386/test-tube_1f9ea.png',
+    badge: 'https://em-content.zobj.net/source/google/386/test-tube_1f9ea.png',
+    tag: 'seguimiento',
+  });
+}
+
 // ===== INIT =====
 renderHome();
 updateBadges();
 setFiltroT('');
+renderNotasRapidas();
+// Verificar recordatorios al abrir (con delay para no interrumpir carga)
+setTimeout(() => verificarRecordatorios(), 3000);
 </script>
 </body>
 </html>
