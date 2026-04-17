@@ -609,6 +609,21 @@ select option { background: var(--surface); }
       <button class="btn btn-surface btn-sm" onclick="exportarReporte()" style="font-size:11px">↑ Copiar</button>
     </div>
   </div>
+
+  <!-- BACKUP CARD -->
+  <div class="card" style="margin-bottom:12px;border-color:rgba(139,92,246,.3)">
+    <div class="card-title" style="color:var(--purple)">🛡 Backup de datos</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:12px;line-height:1.6">
+      Guarda una copia de todos tus datos. Si cambias de teléfono o navegador, impórtala para recuperar todo.
+    </div>
+    <div id="ultimo-backup" style="font-size:11px;color:var(--text3);margin-bottom:12px;font-family:'JetBrains Mono',monospace"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="exportarBackup()" style="flex:1;background:rgba(139,92,246,.15);color:var(--purple);border:1px solid rgba(139,92,246,.3);font-weight:700">⬇ Exportar backup</button>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('import-file').click()" style="flex:1">↑ Importar backup</button>
+    </div>
+    <input type="file" id="import-file" accept=".json" style="display:none" onchange="importarBackup(event)">
+  </div>
+
   <div id="reporte-content"></div>
 </div>
 
@@ -864,7 +879,7 @@ function navigate(page, el) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
   if (el) el.classList.add('active');
-  const renders = { home: renderHome, clientes: renderClientes, tareas: renderTareas, pipeline: renderPipeline, prompts: () => { populateSelects(); renderPrompts(); }, oc: () => { populateSelects(); renderOC(); }, reportes: renderReporte };
+  const renders = { home: renderHome, clientes: renderClientes, tareas: renderTareas, pipeline: renderPipeline, prompts: () => { populateSelects(); renderPrompts(); }, oc: () => { populateSelects(); renderOC(); }, reportes: () => { renderReporte(); actualizarUltimoBackup(); } };
   renders[page]?.();
 }
 
@@ -2094,13 +2109,96 @@ function verificarRecordatorios() {
   });
 }
 
+// ===== BACKUP =====
+function exportarBackup() {
+  const backup = {
+    version: '2.0',
+    fecha: new Date().toISOString(),
+    kam: 'Colocho · Labymed',
+    data: {
+      clientes: DB.clientes,
+      tareas: DB.tareas,
+      ops: DB.ops,
+      ocs: DB.ocs,
+      prompts: DB.prompts,
+      notas: DB.notas,
+    }
+  };
+  const json = JSON.stringify(backup, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const fecha = new Date().toISOString().slice(0,10);
+  a.download = `KAMPro-backup-${fecha}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  // Guardar fecha del último backup
+  localStorage.setItem('kp_ultimo_backup', new Date().toISOString());
+  actualizarUltimoBackup();
+}
+
+function importarBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const backup = JSON.parse(e.target.result);
+      if (!backup.data) throw new Error('Formato inválido');
+      if (!confirm(`¿Restaurar backup del ${new Date(backup.fecha).toLocaleDateString('es-GT')}?\n\nEsto reemplazará todos tus datos actuales.`)) return;
+
+      const d = backup.data;
+      if (d.clientes) { DB.clientes = d.clientes; localStorage.setItem('kp_clientes', JSON.stringify(d.clientes)); }
+      if (d.tareas)   { DB.tareas = d.tareas;     localStorage.setItem('kp_tareas', JSON.stringify(d.tareas)); }
+      if (d.ops)      { DB.ops = d.ops;           localStorage.setItem('kp_ops', JSON.stringify(d.ops)); }
+      if (d.ocs)      { DB.ocs = d.ocs;           localStorage.setItem('kp_ocs', JSON.stringify(d.ocs)); }
+      if (d.prompts)  { DB.prompts = d.prompts;   localStorage.setItem('kp_prompts', JSON.stringify(d.prompts)); }
+      if (d.notas)    { DB.notas = d.notas;       localStorage.setItem('kp_notas', JSON.stringify(d.notas)); }
+
+      alert(`✅ Backup restaurado correctamente.\n${DB.clientes.length} clientes · ${DB.tareas.length} tareas · ${DB.ocs.length} OC`);
+      renderHome();
+      updateBadges();
+      renderNotasRapidas();
+    } catch(err) {
+      alert('❌ Archivo inválido. Asegúrate de usar un backup generado por KAM Pro.');
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+function actualizarUltimoBackup() {
+  const el = document.getElementById('ultimo-backup');
+  if (!el) return;
+  const ub = localStorage.getItem('kp_ultimo_backup');
+  if (!ub) { el.textContent = '⚠ Nunca has hecho un backup'; el.style.color = 'var(--red)'; return; }
+  const dias = Math.floor((Date.now() - new Date(ub)) / 86400000);
+  if (dias === 0) { el.textContent = '✅ Último backup: hoy'; el.style.color = 'var(--green)'; }
+  else if (dias === 1) { el.textContent = '✅ Último backup: ayer'; el.style.color = 'var(--green)'; }
+  else if (dias <= 7) { el.textContent = `⚠ Último backup: hace ${dias} días`; el.style.color = 'var(--amber)'; }
+  else { el.textContent = `❌ Último backup: hace ${dias} días — ¡Haz uno ahora!`; el.style.color = 'var(--red)'; }
+}
+
+function verificarBackupPendiente() {
+  const ub = localStorage.getItem('kp_ultimo_backup');
+  if (!ub) return; // Primera vez, no molestar
+  const dias = Math.floor((Date.now() - new Date(ub)) / 86400000);
+  if (dias >= 7 && Notification.permission === 'granted') {
+    new Notification('KAM Pro · Backup pendiente', {
+      body: `Llevas ${dias} días sin hacer backup. ¡Guarda tus datos ahora!`,
+      tag: 'backup',
+    });
+  }
+}
+
 // ===== INIT =====
 renderHome();
 updateBadges();
 setFiltroT('');
 renderNotasRapidas();
-// Verificar recordatorios al abrir (con delay para no interrumpir carga)
-setTimeout(() => verificarRecordatorios(), 3000);
+setTimeout(() => { verificarRecordatorios(); verificarBackupPendiente(); }, 3000);
 </script>
 </body>
 </html>
